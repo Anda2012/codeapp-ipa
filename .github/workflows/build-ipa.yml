@@ -1,4 +1,4 @@
-name: Build IPA
+name: Build Unsigned IPA
 
 on:
   workflow_dispatch:
@@ -6,12 +6,10 @@ on:
     branches: [main]
 
 jobs:
-  build-ipa:
+  build-unsigned-ipa:
     runs-on: macos-15
 
     env:
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID || 'com.thebaselab.codeapp' }}
       JUDGE0_KEY: ${{ secrets.JUDGE0_KEY }}
       JUDGE0_ENDPOINT: ${{ secrets.JUDGE0_ENDPOINT }}
 
@@ -19,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set Xcode path
+      - name: Select Xcode
         run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
       - name: Download frameworks
@@ -32,14 +30,7 @@ jobs:
           printf '%s\n' "let JUDGE0_ENDPOINT = \"${JUDGE0_ENDPOINT}\"" > CodeApp/Constants/Secrets.swift
           printf '%s\n' "let JUDGE0_KEY = \"${JUDGE0_KEY}\"" >> CodeApp/Constants/Secrets.swift
 
-      - name: Validate signing inputs
-        run: |
-          if [ -z "${APPLE_TEAM_ID}" ]; then
-            echo "Missing APPLE_TEAM_ID secret. Add it under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-
-      - name: Archive app
+      - name: Build unsigned iOS app
         run: |
           set -euo pipefail
           xcodebuild \
@@ -47,41 +38,33 @@ jobs:
             -scheme "Code App" \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath build/Code.xcarchive \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            PRODUCT_BUNDLE_IDENTIFIER="${APPLE_BUNDLE_ID}" \
-            CODE_SIGN_STYLE="Automatic" \
-            archive
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
 
-      - name: Export IPA
+      - name: Package unsigned IPA
         run: |
           set -euo pipefail
-          cat > exportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>ad-hoc</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>teamID</key>
-              <string>${APPLE_TEAM_ID}</string>
-          </dict>
-          </plist>
-          EOF
+          PRODUCTS_DIR="build/DerivedData/Build/Products/Release-iphoneos"
+          APP_PATH="$(find "$PRODUCTS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app product found in $PRODUCTS_DIR"
+            ls -la "$PRODUCTS_DIR"
+            exit 1
+          fi
 
-          xcodebuild \
-            -exportArchive \
-            -archivePath build/Code.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist exportOptions.plist
+          mkdir -p build/unsigned-ipa/Payload
+          ditto "$APP_PATH" "build/unsigned-ipa/Payload/$(basename "$APP_PATH")"
+          find build/unsigned-ipa/Payload -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find build/unsigned-ipa/Payload -type f -name embedded.mobileprovision -delete
+          cd build/unsigned-ipa
+          /usr/bin/zip -qry ../../CodeApp-unsigned.ipa Payload
 
-      - name: Upload IPA artifact
+      - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CodeApp-ipa
-          path: build/ipa/*.ipa
+          name: CodeApp-unsigned-ipa
+          path: CodeApp-unsigned.ipa
           if-no-files-found: error
