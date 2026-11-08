@@ -1,0 +1,96 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID || 'com.thebaselab.codeapp' }}
+      JUDGE0_KEY: ${{ secrets.JUDGE0_KEY }}
+      JUDGE0_ENDPOINT: ${{ secrets.JUDGE0_ENDPOINT }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set Xcode path
+        run: |
+          sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install Ruby tooling
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Download frameworks
+        run: ./downloadFrameworks.sh
+
+      - name: Generate secrets file for runtime config
+        if: ${{ env.JUDGE0_KEY != '' && env.JUDGE0_ENDPOINT != '' }}
+        run: |
+          mkdir -p CodeApp/Constants
+          printf '%s\n' "let JUDGE0_ENDPOINT = \"${JUDGE0_ENDPOINT}\"" > CodeApp/Constants/Secrets.swift
+          printf '%s\n' "let JUDGE0_KEY = \"${JUDGE0_KEY}\"" >> CodeApp/Constants/Secrets.swift
+
+      - name: Validate signing inputs
+        run: |
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "Missing APPLE_TEAM_ID secret. Add your Apple Developer Team ID to export an IPA."
+            exit 1
+          fi
+
+      - name: Archive app
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project Code.xcodeproj \
+            -scheme "Code App" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/Code.xcarchive \
+            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+            PRODUCT_BUNDLE_IDENTIFIER="${APPLE_BUNDLE_ID}" \
+            CODE_SIGN_STYLE="Automatic" \
+            archive
+
+      - name: Export IPA
+        run: |
+          set -euxo pipefail
+          cat > exportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>compileBitcode</key>
+              <false/>
+              <key>method</key>
+              <string>ad-hoc</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>teamID</key>
+              <string>${APPLE_TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/Code.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist exportOptions.plist
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeApp-ipa
+          path: build/ipa/*.ipa
+          if-no-files-found: error
