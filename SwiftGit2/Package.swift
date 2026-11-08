@@ -14,10 +14,11 @@ let package = Package(
     ],
     dependencies: [
         // Dependencies declare other packages that this package depends on.
+        // Use a maintained LibGit2 package instead of the stale thebaselab fork that fails in CI.
         .package(
             name: "Clibgit2",
-            url: "https://github.com/thebaselab/LibGit2-On-iOS",
-            .branch("master")
+            url: "https://github.com/light-tech/LibGit2-On-iOS",
+            from: "1.3.1"
         ),
         .package(
             name: "ZipArchive",
